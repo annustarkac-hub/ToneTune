@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TonoTune</string>
+    <string name="channel_engine">Equalizer engine</string>
+    <string name="channel_engine_desc">Keeps the Tono tuning active while music plays</string>
+    <string name="channel_alerts">Speaker alerts</string>
+    <string name="channel_alerts_desc">Asks you to activate TonoTune when your speaker connects</string>
+    <string name="notif_starting">TonoTune is starting</string>
+    <string name="notif_subtext">Tono EQ active</string>
+    <string name="notif_next">Next preset</string>
+    <string name="notif_turn_off">Turn off</string>
+    <string name="tweak_loudness_short">Auto-Tweak: low-volume loudness boost</string>
+    <string name="tweak_protect_short">Auto-Tweak: woofer protection at high volume</string>
+    <string name="tweak_neutral_short">Auto-Tweak: standing by, preset as tuned</string>
+    <string name="tweak_off_short">Preset applied as tuned</string>
+    <string name="activation_title">%1$s connected</string>
+    <string name="activation_text">Tap to turn on your Tono tuning. To start it automatically next time, allow TonoTune to run in the background.</string>
+</resources>
