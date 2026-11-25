@@ -62,7 +62,7 @@ class ScreenshotTest {
         File(dir, "$name.png").outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
-    @Test @Config(qualifiers = "w411dp-h2900dp-xxhdpi")
+    @Test @Config(qualifiers = "w411dp-h4600dp-xxhdpi")
     fun fullPage() {
         compose.setContent { TonoTuneTheme { TonoScreen(state(), ScreenActions()) } }
         shoot("01_full_page")

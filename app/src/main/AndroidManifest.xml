@@ -20,6 +20,9 @@
     <!-- Lets the user exempt TonoTune from HyperOS / Doze battery killing -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Optional, granted once via ADB: lets TonoTune find every app's audio session (dumpsys audio) -->
+    <uses-permission android:name="android.permission.DUMP" tools:ignore="ProtectedPermissions" />
+
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
 
     <application

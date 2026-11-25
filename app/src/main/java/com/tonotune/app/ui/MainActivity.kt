@@ -24,6 +24,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import com.tonotune.app.audio.SessionScanner
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
@@ -47,11 +50,12 @@ class MainActivity : ComponentActivity() {
         setContent { TonoTuneTheme { TonoApp(viewModel) } }
     }
 
-    override fun onStart() {
-        super.onStart()
-        // The activity is in the foreground here, so starting the FGS is always allowed.
-        viewModel.ensureEngine()
+    override fun onResume() {
+        super.onResume()
         viewModel.refreshBluetooth()
+        // Start the engine once the first frame is out: the service's onCreate runs on this
+        // main thread, so starting it during a busy cold start could miss the FGS deadline.
+        window.decorView.post { viewModel.ensureEngine() }
     }
 }
 
@@ -108,10 +112,13 @@ private fun TonoApp(vm: MainViewModel) {
     val engine by vm.engine.collectAsStateWithLifecycle()
     val bt by vm.bluetoothOutput.collectAsStateWithLifecycle()
     val category by vm.category.collectAsStateWithLifecycle()
+    val soundCheck by vm.soundCheck.collectAsStateWithLifecycle()
+    var dumpGranted by remember { mutableStateOf(SessionScanner.isGranted(context)) }
     var permissionsMissing by remember { mutableStateOf(context.missingPermissions()) }
     var batteryOptimized by remember { mutableStateOf(context.isBatteryOptimized()) }
     var askedThisLaunch by rememberSaveable { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         permissionsMissing = context.missingPermissions()
@@ -122,6 +129,7 @@ private fun TonoApp(vm: MainViewModel) {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         permissionsMissing = context.missingPermissions()
         batteryOptimized = context.isBatteryOptimized()
+        dumpGranted = SessionScanner.isGranted(context)
         vm.refreshBluetooth()
     }
 
@@ -144,6 +152,9 @@ private fun TonoApp(vm: MainViewModel) {
             category = category,
             permissionsMissing = permissionsMissing,
             batteryOptimized = batteryOptimized,
+            soundCheck = soundCheck,
+            dumpGranted = dumpGranted,
+            grantCommand = SessionScanner.grantCommand(context),
         ),
         actions = ScreenActions(
             onMaster = vm::setMasterEnabled,
@@ -165,6 +176,15 @@ private fun TonoApp(vm: MainViewModel) {
             onBatterySettings = { context.openBatterySettings() },
             onAutostartSettings = { context.openAutostartSettings() },
             onBluetoothSettings = { context.openBluetoothSettings() },
+            onSoundCheck = vm::toggleSoundCheck,
+            onSoundCheckEq = vm::setSoundCheckEq,
+            onBypass = vm::setBypass,
+            onEngineMode = vm::setEngineMode,
+            onCopyCommand = {
+                val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                cm?.setPrimaryClip(android.content.ClipData.newPlainText("ADB command", SessionScanner.grantCommand(context)))
+                scope.launch { snackbar.showSnackbar("Command copied — run it on a PC with the phone connected") }
+            },
         ),
         snackbar = snackbar,
     )

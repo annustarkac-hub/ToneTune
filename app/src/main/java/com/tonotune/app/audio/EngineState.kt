@@ -17,6 +17,10 @@ data class EngineState(
     val tweakMode: TweakMode = TweakMode.OFF,
     val applied: EqSettings? = null,
     val lastError: String? = null,
+    val mode: EngineMode = EngineMode.MODERN,
+    val sessions: List<SessionInfo> = emptyList(),
+    val scannerActive: Boolean = false,
+    val bypassed: Boolean = false,
 )
 
 object EngineStateHolder {

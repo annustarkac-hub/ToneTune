@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.tonotune.app.audio.EngineMode
 import com.tonotune.app.audio.EqSettings
 import com.tonotune.app.audio.TonoPresetLibrary
 import kotlinx.coroutines.flow.Flow
@@ -28,6 +29,7 @@ data class UserSettings(
     val autoStartOnConnect: Boolean = true,
     /** Non-null when the user has fine-tuned the selected preset. */
     val customSettings: EqSettings? = null,
+    val engineMode: EngineMode = EngineMode.MODERN,
 ) {
     val preset get() = TonoPresetLibrary.byIdOrDefault(presetId)
     val effectiveSettings: EqSettings get() = customSettings ?: preset.toSettings()
@@ -45,6 +47,7 @@ class TonoPreferences(private val context: Context) {
         val CUSTOM_BANDS = stringPreferencesKey("custom_bands_db")
         val CUSTOM_BASS = intPreferencesKey("custom_bass_boost")
         val CUSTOM_VIRT = intPreferencesKey("custom_virtualizer")
+        val ENGINE_MODE = stringPreferencesKey("engine_mode")
     }
 
     val settings: Flow<UserSettings> = context.tonoDataStore.data
@@ -67,6 +70,8 @@ class TonoPreferences(private val context: Context) {
     suspend fun setAutoTweak(enabled: Boolean) = context.tonoDataStore.edit { it[Keys.AUTO_TWEAK] = enabled }
 
     suspend fun setAutoStart(enabled: Boolean) = context.tonoDataStore.edit { it[Keys.AUTO_START] = enabled }
+
+    suspend fun setEngineMode(mode: EngineMode) = context.tonoDataStore.edit { it[Keys.ENGINE_MODE] = mode.name }
 
     suspend fun setCustom(settings: EqSettings) {
         val clean = settings.sanitized()
@@ -98,6 +103,7 @@ class TonoPreferences(private val context: Context) {
             autoTweakEnabled = p[Keys.AUTO_TWEAK] ?: true,
             autoStartOnConnect = p[Keys.AUTO_START] ?: true,
             customSettings = custom,
+            engineMode = p[Keys.ENGINE_MODE]?.let { n -> EngineMode.entries.firstOrNull { it.name == n } } ?: EngineMode.MODERN,
         )
     }
 

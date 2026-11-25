@@ -25,11 +25,16 @@ android {
         applicationId = "com.tonotune.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
 
-        ndk { abiFilters += listOf("arm64-v8a") }
+        // Release targets the Poco X8 Pro Max (arm64). -PtonoAllAbis adds x86_64 for emulator self-tests.
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+            if (project.hasProperty("tonoAllAbis")) abiFilters += listOf("x86_64")
+        }
         vectorDrawables { useSupportLibrary = true }
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -111,6 +116,10 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
+
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.rules)
+    androidTestImplementation(libs.androidx.test.ext.junit)
 
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)

@@ -21,7 +21,9 @@ class AudioSessionReceiver : BroadcastReceiver() {
         }
         TonoAudioService.sendIfRunning(
             context,
-            Intent(action).putExtra(AudioEffect.EXTRA_AUDIO_SESSION, session),
+            Intent(action)
+                .putExtra(AudioEffect.EXTRA_AUDIO_SESSION, session)
+                .putExtra(AudioEffect.EXTRA_PACKAGE_NAME, intent.getStringExtra(AudioEffect.EXTRA_PACKAGE_NAME)),
         )
     }
 }

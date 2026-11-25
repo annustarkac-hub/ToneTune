@@ -8,10 +8,23 @@ Built with Kotlin and Jetpack Compose (Material 3). Targets Android 16 (API 36) 
 | ![](docs/screenshots/02_phone_dj_protect.jpg) | ![](docs/screenshots/04_dance_filter_custom.jpg) | ![](docs/screenshots/03_disconnected_helpers.jpg) |
 
 ## Install
-1. Copy `dist/TonoTune-v1.0.0-release.apk` to the phone (SHA-256 in the `.sha256` file next to it).
+1. Copy `dist/TonoTune-v1.1.0-release.apk` (it installs over v1.0.0; same signing key) to the phone (SHA-256 in the `.sha256` file next to it).
 2. Open it and allow "Install unknown apps" for your file manager.
 3. Open TonoTune and allow **Nearby devices (Bluetooth)** and **Notifications**.
 4. On HyperOS, tap **Battery → No restrictions** and **Autostart → on** in the "Keep TonoTune alive" card. Without this, Android 12+ blocks the EQ from starting by itself when the speaker connects, and TonoTune shows a one-tap "activate" notification instead.
+
+## "I can't hear any difference": fixed in v1.1.0
+v1.0.0 put the EQ only on the **global output mix (session 0)**. On an Android 11 device, a measurement with Visualizer showed that this changes **nothing** in other apps' audio (≈0 dB), while the same EQ attached to an app's own audio session changes it by 6–7 dB. The engine said "LIVE", but the music was untouched.
+
+v1.1.0 fixes this:
+1. **The EQ is attached per app.** Spotify, YT Music, Poweramp and most players announce their audio session when playback starts. TonoTune links to it, and the session appears under *Settings → Engine → App sessions*. Start TonoTune before pressing play.
+2. **Catch every app (optional, one-time PC step).** YouTube, Instagram and many other apps never announce a session. Grant one permission once:
+   - Developer options → USB debugging on. On Xiaomi/HyperOS, also turn on **USB debugging (Security settings)**.
+   - On a PC, run: `adb shell pm grant com.tonotune.app android.permission.DUMP`
+   - TonoTune then reads the playing sessions from `dumpsys audio` every 4 s and attaches to all of them. The in-app command has a copy button.
+3. **Modern engine.** `DynamicsProcessing` provides a 14-band curve, with Bass Boost built into the low bands, plus a limiter so boosts don't clip. **Classic** (the legacy Equalizer + BassBoost) is still available as a switch.
+4. **Sound Check.** A built-in test beat plays on the Tono through the Tono chain, with a **Tono EQ / Original** switch. If you hear a change here but not in your music app, use step 2.
+5. **Hold to hear original (A/B).** Press and hold to bypass the EQ on your own music.
 
 ## Features
 - **27 presets calibrated for the Tono** (Tono Pro Signature, Garhwali Song, DJ Songs, Dance Songs and 23 more) with category filters.
@@ -33,6 +46,19 @@ Built with Kotlin and Jetpack Compose (Material 3). Targets Android 16 (API 36) 
 
 Note: `Virtualizer` is deprecated on API 36 but still works, and it is the only system-wide widener available. Some ROMs refuse global effects while Dolby or another EQ app holds them. The app then shows an "Audio effects blocked" card.
 
+## Tests
+- **38 JVM tests** (`./gradlew testDebugUnitTest`) cover presets, EQ maths, the DP curve, Auto-Tweak, the `dumpsys` session parser (Android 8–16 formats), the test signal, DataStore, the foreground-service lifecycle and UI screenshots.
+- **On-device self-test** (`app/src/androidTest`) measures the real output with Visualizer:
+  - Modern and Classic on an app session must change the bass/treble balance.
+  - Session 0 is logged as a diagnostic.
+  - An end-to-end test runs the real service, sends a "session opened" broadcast like a music player does, and checks that the A/B bypass changes that app's audio.
+
+  Run it on a phone:
+  ```bash
+  ./gradlew connectedDebugAndroidTest
+  ```
+  On an x86_64 emulator, add `-PtonoAllAbis`.
+
 ## Build
 ```bash
 ./gradlew testDebugUnitTest assembleDebug assembleRelease lintRelease
@@ -49,7 +75,8 @@ For CI builds signed with your release key, add these repository secrets: `TONO_
 ## Project layout
 ```
 app/src/main/java/com/tonotune/app/
-  audio/     EqPreset, TonoPresetLibrary (27 presets), EqMath + AutoTweakEngine, TonoEffectEngine, TonoDevices, EngineState
+  audio/     EqPreset, TonoPresetLibrary (27 presets), EqMath (+ DpCurve, AutoTweakEngine), TonoEffectEngine,
+             SessionScanner, SoundCheck (TestSignal + player), EngineControl, TonoDevices, EngineState
   service/   TonoAudioService (foreground service, re-lock, volume observer)
   receiver/  BluetoothTonoReceiver, AudioSessionReceiver, NotificationActionReceiver
   data/      TonoPreferences (DataStore)

@@ -8,7 +8,11 @@ import android.os.Handler
 import android.os.Looper
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.tonotune.app.audio.EngineControl
+import com.tonotune.app.audio.EngineMode
 import com.tonotune.app.audio.EngineState
+import com.tonotune.app.audio.SoundCheckPlayer
+import com.tonotune.app.audio.TestSignal
 import com.tonotune.app.audio.EngineStateHolder
 import com.tonotune.app.audio.EqSettings
 import com.tonotune.app.audio.PresetCategory
@@ -22,7 +26,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -47,6 +54,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _category = MutableStateFlow<PresetCategory?>(null)
     val category: StateFlow<PresetCategory?> = _category.asStateFlow()
 
+    private val _soundCheck = MutableStateFlow(SoundCheckUi())
+    val soundCheck: StateFlow<SoundCheckUi> = _soundCheck.asStateFlow()
+    private val soundCheckPlayer = SoundCheckPlayer()
+    private var testPcm: ShortArray? = null
+
     private val deviceCallback = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) = refreshBluetooth()
         override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) = refreshBluetooth()
@@ -63,6 +75,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 prefs.setCustom(d)
             }
         }
+        // Live-update the sound check while the user moves faders or switches presets.
+        viewModelScope.launch {
+            combine(settings, _draft) { s, d -> d ?: s?.effectiveSettings }.collect { shown ->
+                if (shown != null && _soundCheck.value.playing) soundCheckPlayer.update(shown, _soundCheck.value.eqOn)
+            }
+        }
         // Drop the draft once persisted (or when the preset changed elsewhere, e.g. notification).
         viewModelScope.launch {
             var lastPreset: String? = null
@@ -72,6 +90,49 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (lastPreset != null && lastPreset != s.presetId) _draft.value = null
                 lastPreset = s.presetId
             }
+        }
+    }
+
+    private fun shownSettings(): EqSettings = _draft.value ?: settings.value?.effectiveSettings ?: EqSettings.FLAT
+
+    /** Plays the built-in test loop through the Tono chain on its own session. */
+    fun toggleSoundCheck() {
+        if (_soundCheck.value.playing || _soundCheck.value.preparing) { stopSoundCheck(); return }
+        viewModelScope.launch {
+            _soundCheck.value = _soundCheck.value.copy(preparing = true, error = null)
+            val pcm = testPcm ?: withContext(Dispatchers.Default) { TestSignal.musicLoop() }.also { testPcm = it }
+            // Bypass the global engine meanwhile so the test loop is not processed twice.
+            EngineControl.bypass.value = true
+            val mode = settings.value?.engineMode ?: EngineMode.MODERN
+            val err = withContext(Dispatchers.Default) {
+                soundCheckPlayer.start(pcm, mode, shownSettings(), _soundCheck.value.eqOn)
+            }
+            val ok = soundCheckPlayer.isPlaying
+            if (!ok) EngineControl.bypass.value = false
+            _soundCheck.value = _soundCheck.value.copy(playing = ok, preparing = false, error = err)
+        }
+    }
+
+    fun setSoundCheckEq(on: Boolean) {
+        _soundCheck.value = _soundCheck.value.copy(eqOn = on)
+        soundCheckPlayer.update(shownSettings(), on)
+    }
+
+    fun stopSoundCheck() {
+        soundCheckPlayer.stop()
+        EngineControl.bypass.value = false
+        _soundCheck.value = _soundCheck.value.copy(playing = false, preparing = false)
+    }
+
+    /** Press-and-hold A/B on the user's own music. */
+    fun setBypass(bypass: Boolean) {
+        if (_soundCheck.value.playing) setSoundCheckEq(!bypass) else EngineControl.bypass.value = bypass
+    }
+
+    fun setEngineMode(mode: EngineMode) {
+        viewModelScope.launch {
+            prefs.setEngineMode(mode)
+            if (_soundCheck.value.playing) { stopSoundCheck(); toggleSoundCheck() }
         }
     }
 
@@ -124,9 +185,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        stopSoundCheck()
         runCatching { audioManager?.unregisterAudioDeviceCallback(deviceCallback) }
         super.onCleared()
     }
 
     private companion object { const val DRAFT_WRITE_DELAY_MS = 60L }
 }
+
+data class SoundCheckUi(
+    val playing: Boolean = false,
+    val preparing: Boolean = false,
+    val eqOn: Boolean = true,
+    val error: String? = null,
+)

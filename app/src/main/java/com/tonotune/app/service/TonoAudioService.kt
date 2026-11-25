@@ -25,7 +25,10 @@ import androidx.lifecycle.lifecycleScope
 import com.tonotune.app.R
 import com.tonotune.app.TonoTuneApp
 import com.tonotune.app.audio.AutoTweakEngine
+import com.tonotune.app.audio.EngineControl
+import com.tonotune.app.audio.EngineMode
 import com.tonotune.app.audio.EngineStateHolder
+import com.tonotune.app.audio.SessionScanner
 import com.tonotune.app.audio.TonoEffectEngine
 import com.tonotune.app.audio.TweakMode
 import com.tonotune.app.audio.EqMath
@@ -56,6 +59,12 @@ class TonoAudioService : LifecycleService() {
     private val volumeRatio = MutableStateFlow(0.5f)
     private var lastNotificationKey: String? = null
     private var sessionReceiverRegistered = false
+    @Volatile private var currentMode: EngineMode = EngineMode.MODERN
+    @Volatile private var scannerActive = false
+    /** Sessions announced by apps via broadcast; never auto-detached by the scanner. */
+    private val announcedSessions = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+    /** Sessions found by the dumpsys scanner. */
+    private val scannedSessions = mutableSetOf<Int>()
 
     private val volumeObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean) = refreshVolume()
@@ -66,7 +75,10 @@ class TonoAudioService : LifecycleService() {
             when (intent.action) {
                 VOLUME_CHANGED_ACTION -> refreshVolume()
                 AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION ->
-                    onSessionOpened(intent.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, -1))
+                    onSessionOpened(
+                        intent.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, -1),
+                        intent.getStringExtra(AudioEffect.EXTRA_PACKAGE_NAME),
+                    )
                 AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION ->
                     onSessionClosed(intent.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, -1))
             }
@@ -84,7 +96,12 @@ class TonoAudioService : LifecycleService() {
         prefs = TonoPreferences(applicationContext)
         audioManager = getSystemService(AudioManager::class.java)
 
-        engine.start()
+        lifecycleScope.launch(Dispatchers.Default) {
+            currentMode = prefs.current().engineMode
+            engine.setMode(currentMode)
+            engine.start()
+            publish()
+        }
         refreshVolume()
         registerListeners()
         observeSettings()
@@ -95,7 +112,10 @@ class TonoAudioService : LifecycleService() {
         super.onStartCommand(intent, flags, startId)
         when (intent?.action) {
             ACTION_STOP -> { stopSelfCleanly(); return START_NOT_STICKY }
-            ACTION_SESSION_OPEN -> onSessionOpened(intent.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, -1))
+            ACTION_SESSION_OPEN -> onSessionOpened(
+                intent.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, -1),
+                intent.getStringExtra(AudioEffect.EXTRA_PACKAGE_NAME),
+            )
             ACTION_SESSION_CLOSE -> onSessionClosed(intent.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, -1))
             ACTION_REAPPLY -> lifecycleScope.launch(Dispatchers.Default) { engine.relockIfNeeded(); engine.reassert(); publish() }
         }
@@ -131,14 +151,14 @@ class TonoAudioService : LifecycleService() {
 
     private fun observeSettings() {
         lifecycleScope.launch {
-            combine(prefs.settings, volumeRatio) { s, v -> s to v }
+            combine(prefs.settings, volumeRatio, EngineControl.bypass) { s, v, b -> Triple(s, v, b) }
                 .distinctUntilChanged()
-                .collect { (settings, ratio) ->
+                .collect { (settings, ratio, bypass) ->
                     if (!settings.masterEnabled) {
                         stopSelfCleanly()
                         return@collect
                     }
-                    applySettings(settings, ratio)
+                    applySettings(settings, ratio, bypass)
                 }
         }
         // Keep the notification in sync with preset + tweak mode.
@@ -151,9 +171,13 @@ class TonoAudioService : LifecycleService() {
         }
     }
 
-    private suspend fun applySettings(settings: UserSettings, ratio: Float) = withContext(Dispatchers.Default) {
+    private suspend fun applySettings(settings: UserSettings, ratio: Float, bypass: Boolean) = withContext(Dispatchers.Default) {
+        if (settings.engineMode != currentMode) {
+            currentMode = settings.engineMode
+            engine.setMode(currentMode)
+        }
         val tweaked = AutoTweakEngine.apply(settings.effectiveSettings, ratio, settings.autoTweakEnabled)
-        engine.apply(tweaked, enabled = true)
+        engine.apply(tweaked, enabled = !bypass)
         publish(tweaked, AutoTweakEngine.modeFor(ratio, settings.autoTweakEnabled))
     }
 
@@ -161,8 +185,11 @@ class TonoAudioService : LifecycleService() {
         applied: com.tonotune.app.audio.EqSettings? = null,
         mode: TweakMode? = null,
     ) {
+        if (!isRunning) return
         val primary = engine.primary
         EngineStateHolder.update { st ->
+            // Atomic re-check: never resurrect "running" after onDestroy reset the state.
+            if (!isRunning) return@update st
             st.copy(
                 running = true,
                 effectsAttached = engine.anyAttached,
@@ -174,6 +201,10 @@ class TonoAudioService : LifecycleService() {
                 tweakMode = mode ?: st.tweakMode,
                 applied = applied ?: st.applied,
                 lastError = if (engine.anyAttached) null else engine.lastError,
+                mode = currentMode,
+                sessions = engine.sessions(),
+                scannerActive = scannerActive,
+                bypassed = EngineControl.bypass.value,
             )
         }
     }
@@ -186,6 +217,13 @@ class TonoAudioService : LifecycleService() {
                 val relocked = engine.relockIfNeeded()
                 if (relocked > 0) Log.i(TAG, "Re-locked $relocked effect chain(s)")
                 publish()
+            }
+        }
+        // Optional "catch every app" scanner (needs DUMP granted once via ADB).
+        lifecycleScope.launch(Dispatchers.Default) {
+            while (isActive) {
+                scanSessions()
+                delay(SCAN_INTERVAL_MS)
             }
         }
         // Fallback volume poll for ROMs that do not deliver volume broadcasts.
@@ -207,17 +245,48 @@ class TonoAudioService : LifecycleService() {
         volumeRatio.value = ratio
     }
 
-    private fun onSessionOpened(sessionId: Int) {
+    private suspend fun scanSessions() {
+        if (!SessionScanner.isGranted(this)) {
+            scannerActive = false
+            return
+        }
+        val found = SessionScanner.scan()
+        scannerActive = found != null
+        if (found == null) return
+        val ids = found.map { it.sessionId }.toSet()
+        var changed = false
+        found.filter { it.sessionId !in scannedSessions }.forEach { pb ->
+            engine.attach(pb.sessionId, SessionScanner.labelFor(this, pb.uid))
+            scannedSessions += pb.sessionId
+            changed = true
+        }
+        (scannedSessions - ids).forEach { gone ->
+            scannedSessions -= gone
+            if (gone !in announcedSessions) engine.detach(gone)
+            changed = true
+        }
+        if (changed) Log.i(TAG, "Scanner sessions: $scannedSessions")
+        publish()
+    }
+
+    private fun onSessionOpened(sessionId: Int, packageName: String?) {
         if (sessionId <= 0) return
+        announcedSessions += sessionId
         lifecycleScope.launch(Dispatchers.Default) {
-            engine.attach(sessionId)
+            engine.attach(sessionId, packageName?.let(::appLabel))
             engine.reassert()
             publish()
         }
     }
 
+    private fun appLabel(pkg: String): String = runCatching {
+        packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+    }.getOrDefault(pkg)
+
     private fun onSessionClosed(sessionId: Int) {
         if (sessionId <= 0) return
+        announcedSessions -= sessionId
+        if (sessionId in scannedSessions) return
         lifecycleScope.launch(Dispatchers.Default) {
             engine.detach(sessionId)
             engine.reassert()
@@ -283,7 +352,9 @@ class TonoAudioService : LifecycleService() {
         isRunning = false
         runCatching { contentResolver.unregisterContentObserver(volumeObserver) }
         if (sessionReceiverRegistered) runCatching { unregisterReceiver(runtimeReceiver) }
-        engine.release()
+        // Releasing effects can block on the engine lock; never do that on the main thread.
+        Thread({ engine.release() }, "tono-release").start()
+        EngineControl.bypass.value = false
         EngineStateHolder.reset()
         super.onDestroy()
     }
@@ -293,6 +364,7 @@ class TonoAudioService : LifecycleService() {
         const val NOTIFICATION_ID = 0x70A0
         private const val RELOCK_INTERVAL_MS = 8_000L
         private const val VOLUME_POLL_MS = 1_500L
+        private const val SCAN_INTERVAL_MS = 4_000L
         private const val VOLUME_CHANGED_ACTION = "android.media.VOLUME_CHANGED_ACTION"
 
         const val ACTION_START = "com.tonotune.app.action.START"
@@ -312,7 +384,10 @@ class TonoAudioService : LifecycleService() {
         fun start(context: Context, action: String = ACTION_START): Boolean {
             val intent = Intent(context, TonoAudioService::class.java).setAction(action)
             return try {
-                ContextCompat.startForegroundService(context, intent)
+                // Already foreground: a plain start just delivers the command, with no new
+                // "must call startForeground within N seconds" obligation (avoids an ANR/crash).
+                if (isRunning) context.startService(intent)
+                else ContextCompat.startForegroundService(context, intent)
                 true
             } catch (e: Exception) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && e is ForegroundServiceStartNotAllowedException) {

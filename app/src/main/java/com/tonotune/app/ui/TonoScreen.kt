@@ -33,6 +33,18 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.LinkOff
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.material.icons.automirrored.rounded.CompareArrows
+import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.HearingDisabled
+import androidx.compose.material.icons.rounded.Headphones
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.BatteryChargingFull
@@ -77,6 +89,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.tonotune.app.BuildConfig
 import com.tonotune.app.audio.AutoTweakEngine
+import com.tonotune.app.audio.EngineMode
 import com.tonotune.app.audio.EngineState
 import com.tonotune.app.audio.EqSettings
 import com.tonotune.app.audio.PresetCategory
@@ -108,6 +121,9 @@ data class ScreenState(
     val category: PresetCategory?,
     val permissionsMissing: Boolean,
     val batteryOptimized: Boolean,
+    val soundCheck: SoundCheckUi = SoundCheckUi(),
+    val dumpGranted: Boolean = false,
+    val grantCommand: String = "adb shell pm grant com.tonotune.app android.permission.DUMP",
 ) {
     val shown: EqSettings get() = draft ?: settings.effectiveSettings
     val tonoConnected: Boolean get() = TonoDevices.matches(bluetoothOutput)
@@ -131,6 +147,11 @@ class ScreenActions(
     val onBatterySettings: () -> Unit = {},
     val onAutostartSettings: () -> Unit = {},
     val onBluetoothSettings: () -> Unit = {},
+    val onSoundCheck: () -> Unit = {},
+    val onSoundCheckEq: (Boolean) -> Unit = {},
+    val onBypass: (Boolean) -> Unit = {},
+    val onEngineMode: (EngineMode) -> Unit = {},
+    val onCopyCommand: () -> Unit = {},
 )
 
 @Composable
@@ -168,6 +189,7 @@ fun TonoScreen(state: ScreenState, actions: ScreenActions, snackbar: SnackbarHos
                 item("brand") { BrandBar(state) }
                 item("hero") { HeroCard(state, actions) }
                 item("autotweak") { AutoTweakCard(state, actions) }
+                item("soundcheck") { SoundCheckCard(state, actions) }
                 item("helpers") { HelperCards(state, actions) }
                 item("presets_header") {
                     SectionHeader("Presets", subtitle = "${TonoPresetLibrary.presets.size} tunings calibrated for the Tono's 10.16 cm woofer")
@@ -334,6 +356,9 @@ private fun HeroCard(state: ScreenState, actions: ScreenActions) {
                 }
             }
         }
+        AnimatedVisibility(active && state.engine.running) {
+            HoldToCompare(state.engine.bypassed, actions.onBypass, Modifier.padding(top = 14.dp))
+        }
         Spacer(Modifier.height(14.dp))
         HorizontalDivider(color = Tono.OutlineSoft)
         Spacer(Modifier.height(6.dp))
@@ -413,7 +438,9 @@ private fun AutoTweakCard(state: ScreenState, actions: ScreenActions) {
 @Composable
 private fun HelperCards(state: ScreenState, actions: ScreenActions) {
     val engineError = state.engine.lastError.takeIf { state.engine.running && !state.engine.effectsAttached }
-    val show = state.permissionsMissing || state.batteryOptimized || engineError != null
+    val noAppLinked = state.engine.running && state.settings.masterEnabled &&
+        state.engine.attachedSessions == 0 && !state.dumpGranted && engineError == null
+    val show = state.permissionsMissing || state.batteryOptimized || engineError != null || noAppLinked
     AnimatedVisibility(show, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (state.permissionsMissing) {
@@ -431,6 +458,16 @@ private fun HelperCards(state: ScreenState, actions: ScreenActions) {
                     text = "HyperOS closes background apps. Set battery to 'No restrictions' and turn on Autostart so the EQ starts by itself when the Tono connects.",
                     primary = "Battery" to actions.onBatterySettings,
                     secondary = "Autostart" to actions.onAutostartSettings,
+                )
+            }
+            if (noAppLinked) {
+                HelperCard(
+                    icon = Icons.Rounded.LinkOff, tint = Tono.Violet,
+                    title = "Not hearing a difference?",
+                    text = "Modern Android ignores system-wide EQ for apps that hide their audio (YouTube, Instagram…). " +
+                        "Spotify, YT Music and most music players link automatically when you press play — start music, then check “App sessions” below. " +
+                        "To cover every app, run this once from a PC (USB debugging on):",
+                    primary = "Copy command" to actions.onCopyCommand,
                 )
             }
             if (engineError != null) {
@@ -589,6 +626,12 @@ private fun SettingsCard(state: ScreenState, actions: ScreenActions) {
         Spacer(Modifier.height(8.dp))
         HorizontalDivider(color = Tono.OutlineSoft)
         Spacer(Modifier.height(12.dp))
+        EngineModeSelector(state.settings.engineMode, actions.onEngineMode)
+        Spacer(Modifier.height(12.dp))
+        CatchEveryApp(state, actions)
+        Spacer(Modifier.height(12.dp))
+        HorizontalDivider(color = Tono.OutlineSoft)
+        Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Rounded.Memory, null, tint = Tono.TextMuted, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
@@ -599,6 +642,7 @@ private fun SettingsCard(state: ScreenState, actions: ScreenActions) {
         val lines = buildList {
             add("Status" to if (e.running) "Live (foreground service)" else "Stopped")
             add("Global output (session 0)" to if (e.globalSessionOk) "Locked · priority max" else if (e.running) "Unavailable" else "—")
+            add("Engine type" to if (e.running) (e.sessions.firstOrNull { it.sessionId == 0 }?.kind ?: "—") else "—")
             add("App sessions" to if (e.running) e.attachedSessions.toString() else "—")
             add("Device EQ bands" to if (e.deviceBandCount > 0) {
                 val r = e.bandRangeDb
@@ -609,6 +653,13 @@ private fun SettingsCard(state: ScreenState, actions: ScreenActions) {
             Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
                 Text(k, style = MaterialTheme.typography.bodySmall, color = Tono.TextSecondary, modifier = Modifier.weight(1f))
                 Text(v, style = MaterialTheme.typography.bodySmall.merge(Numeric), color = Tono.TextPrimary)
+            }
+        }
+        e.sessions.filter { it.sessionId != 0 }.take(8).forEach { info ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 2.dp, horizontal = 8.dp)) {
+                Text("• " + (info.label ?: "Session ${info.sessionId}"), style = MaterialTheme.typography.bodySmall,
+                    color = Tono.TextMuted, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(info.kind, style = MaterialTheme.typography.bodySmall, color = Tono.Green)
             }
         }
     }
@@ -650,5 +701,168 @@ fun PresetChangeAnnouncer(presetId: String?, snackbar: SnackbarHostState) {
         if (first) { first = false; return@LaunchedEffect }
         snackbar.currentSnackbarData?.dismiss()
         snackbar.showSnackbar("${TonoPresetLibrary.byIdOrDefault(presetId).name} applied")
+    }
+}
+
+/** Press and hold to hear the music without the Tono tuning (instant A/B). */
+@Composable
+private fun HoldToCompare(bypassed: Boolean, onBypass: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+    val bg by animateColorAsState(if (bypassed) Tono.Amber.copy(alpha = 0.22f) else Tono.SurfaceHigher, label = "holdBg")
+    val fg by animateColorAsState(if (bypassed) Tono.Amber else Tono.TextPrimary, label = "holdFg")
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(bg)
+            .border(1.dp, fg.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
+            .semantics { contentDescription = "Hold to hear original sound without equalizer" }
+            .pointerInput(Unit) {
+                detectTapGestures(onPress = {
+                    onBypass(true)
+                    try { tryAwaitRelease() } finally { onBypass(false) }
+                })
+            }
+            .padding(vertical = 12.dp, horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Icon(if (bypassed) Icons.Rounded.HearingDisabled else Icons.AutoMirrored.Rounded.CompareArrows, null, tint = fg, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(
+            if (bypassed) "Original sound — release for Tono EQ" else "Hold to hear original (A/B)",
+            style = MaterialTheme.typography.labelLarge, color = fg,
+        )
+    }
+}
+
+@Composable
+private fun SoundCheckCard(state: ScreenState, actions: ScreenActions) {
+    val sc = state.soundCheck
+    TonoCard(borderBrush = if (sc.playing) Brush.linearGradient(listOf(Tono.Amber, Tono.Pink)) else null) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(42.dp).clip(RoundedCornerShape(13.dp)).background(Tono.Amber.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
+                if (sc.playing) PlayingBars(Tono.Amber) else Icon(Icons.Rounded.Headphones, null, tint = Tono.Amber, modifier = Modifier.size(22.dp))
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Sound Check", style = MaterialTheme.typography.titleSmall, color = Tono.TextPrimary)
+                Text("Play a test beat on the Tono and flip EQ on/off to hear the difference",
+                    style = MaterialTheme.typography.bodySmall, color = Tono.TextSecondary)
+            }
+            Spacer(Modifier.width(8.dp))
+            FilledTonalButton(
+                onClick = actions.onSoundCheck,
+                colors = ButtonDefaults.filledTonalButtonColors(containerColor = Tono.Amber.copy(alpha = 0.18f), contentColor = Tono.Amber),
+            ) {
+                Icon(if (sc.playing) Icons.Rounded.Stop else Icons.Rounded.PlayArrow, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(if (sc.playing) "Stop" else if (sc.preparing) "Loading" else "Play")
+            }
+        }
+        AnimatedVisibility(sc.playing, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+            Column(Modifier.padding(top = 12.dp)) {
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Tono.SurfaceHigher).padding(4.dp),
+                ) {
+                    listOf(true to "Tono EQ", false to "Original").forEach { (on, label) ->
+                        val sel = sc.eqOn == on
+                        val bg by animateColorAsState(if (sel) (if (on) Tono.Cyan else Tono.Amber).copy(alpha = 0.22f) else Color.Transparent, label = "ab")
+                        Box(
+                            Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(bg)
+                                .clickable(role = androidx.compose.ui.semantics.Role.RadioButton) { actions.onSoundCheckEq(on) }
+                                .padding(vertical = 10.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(label, style = MaterialTheme.typography.labelLarge,
+                                color = if (sel) (if (on) Tono.Cyan else Tono.Amber) else Tono.TextSecondary)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Faders and presets change the beat live. If you hear a clear change here but not in your music app, " +
+                        "switch Engine below or turn on “Catch every app”.",
+                    style = MaterialTheme.typography.bodySmall, color = Tono.TextMuted,
+                )
+            }
+        }
+        sc.error?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = Tono.Red, modifier = Modifier.padding(top = 8.dp))
+        }
+    }
+}
+
+@Composable
+private fun PlayingBars(color: Color) {
+    val t = androidx.compose.animation.core.rememberInfiniteTransition(label = "bars")
+    val phase by t.animateFloat(
+        0f, 1f,
+        androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(900, easing = androidx.compose.animation.core.LinearEasing)),
+        label = "barPhase",
+    )
+    androidx.compose.foundation.Canvas(Modifier.size(22.dp)) {
+        val w = size.width / 5
+        for (i in 0 until 3) {
+            val h = size.height * (0.35f + 0.65f * kotlin.math.abs(kotlin.math.sin((phase + i * 0.33f) * Math.PI)).toFloat())
+            drawRoundRect(color, androidx.compose.ui.geometry.Offset(w * (i * 2), size.height - h),
+                androidx.compose.ui.geometry.Size(w, h), androidx.compose.ui.geometry.CornerRadius(w / 2))
+        }
+    }
+}
+
+@Composable
+private fun EngineModeSelector(mode: EngineMode, onSelect: (EngineMode) -> Unit) {
+    Text("AUDIO ENGINE", style = MaterialTheme.typography.labelSmall, color = Tono.TextMuted)
+    Spacer(Modifier.height(8.dp))
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Tono.SurfaceHigher).padding(4.dp)) {
+        EngineMode.entries.forEach { m ->
+            val sel = m == mode
+            val bg by animateColorAsState(if (sel) Tono.Cyan.copy(alpha = 0.2f) else Color.Transparent, label = "mode")
+            Box(
+                Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(bg)
+                    .clickable(role = androidx.compose.ui.semantics.Role.RadioButton) { onSelect(m) }
+                    .padding(vertical = 10.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(m.label, style = MaterialTheme.typography.labelLarge, color = if (sel) Tono.Cyan else Tono.TextSecondary)
+            }
+        }
+    }
+    Spacer(Modifier.height(6.dp))
+    Text(mode.description, style = MaterialTheme.typography.bodySmall, color = Tono.TextMuted)
+}
+
+@Composable
+private fun CatchEveryApp(state: ScreenState, actions: ScreenActions) {
+    val on = state.dumpGranted
+    val color = if (on) Tono.Green else Tono.Amber
+    Row(verticalAlignment = Alignment.Top) {
+        Box(Modifier.size(42.dp).clip(RoundedCornerShape(13.dp)).background(color.copy(alpha = 0.15f)), contentAlignment = Alignment.Center) {
+            Icon(Icons.Rounded.Apps, null, tint = color, modifier = Modifier.size(22.dp))
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Catch every app", style = MaterialTheme.typography.titleSmall, color = Tono.TextPrimary, modifier = Modifier.weight(1f))
+                Pill(if (on) (if (state.engine.scannerActive) "Active" else "Granted") else "Optional", color)
+            }
+            Text(
+                if (on) "TonoTune attaches the EQ directly to YouTube, Spotify, Instagram and every other playing app."
+                else "Android 10+ skips the global EQ for many apps (YouTube, Instagram…). Grant one permission from a PC once so TonoTune can attach to every app. On Xiaomi/HyperOS also turn on “USB debugging (Security settings)” in Developer options:",
+                style = MaterialTheme.typography.bodySmall, color = Tono.TextSecondary,
+            )
+            if (!on) {
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Tono.Bg)
+                        .clickable(onClick = actions.onCopyCommand).padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(state.grantCommand, style = MaterialTheme.typography.bodySmall.merge(Numeric), color = Tono.Cyan, modifier = Modifier.weight(1f))
+                    Spacer(Modifier.width(8.dp))
+                    Icon(Icons.Rounded.ContentCopy, "Copy command", tint = Tono.TextMuted, modifier = Modifier.size(18.dp))
+                }
+            }
+        }
     }
 }
