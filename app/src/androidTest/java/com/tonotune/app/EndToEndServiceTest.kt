@@ -84,7 +84,7 @@ class EndToEndServiceTest {
         waited = 0
         while (EngineStateHolder.state.value.attachedSessions < 1 && waited < 100) { Thread.sleep(100); waited++ }
         val st = EngineStateHolder.state.value
-        Log.i("TonoE2E", "state: sessions=${st.sessions} global=${st.globalSessionOk}")
+        Log.i("TonoE2E", "state: sessions=${st.sessions}")
         assertTrue("app session was not linked: ${st.sessions}", st.attachedSessions >= 1)
 
         Thread.sleep(600)
@@ -100,5 +100,27 @@ class EndToEndServiceTest {
         Log.i("TonoE2E", "bypass=%.1f tuned=%.1f delta=%.1f dB".format(off, on, on - off))
         assertTrue("tuning did not change the app's audio (delta ${on - off} dB)", on - off > 3)
         runBlocking { prefs.resetCustom(); prefs.setAutoTweak(true) }
+    }
+
+    @Test fun playerBroadcastStartsStoppedEngineAndLinksSession() {
+        runBlocking { TonoPreferences(ctx).setMasterEnabled(true) }
+        TonoAudioService.stop(ctx)
+        var waited = 0
+        while (TonoAudioService.isRunning && waited < 50) { Thread.sleep(100); waited++ }
+        val fakeSession = 4242
+        // What players that address EQ apps directly send (explicit broadcast).
+        ctx.sendBroadcast(Intent(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION)
+            .setPackage(ctx.packageName)
+            .putExtra(AudioEffect.EXTRA_AUDIO_SESSION, fakeSession)
+            .putExtra(AudioEffect.EXTRA_PACKAGE_NAME, "com.example.player"))
+        waited = 0
+        while (EngineStateHolder.state.value.sessions.none { it.sessionId == fakeSession } && waited < 150) {
+            Thread.sleep(100); waited++
+        }
+        val st = EngineStateHolder.state.value
+        Log.i("TonoE2E", "auto-start: running=${st.running} sessions=${st.sessions}")
+        assertTrue("engine did not start", st.running)
+        // A fake id may be refused by the audio server; the engine must at least have tried and stayed up.
+        assertTrue(TonoAudioService.isRunning)
     }
 }

@@ -43,14 +43,6 @@ class EffectStack(
             else -> "None"
         }
 
-    val bandCount: Int
-        get() = if (dynamics != null) DpCurve.BAND_COUNT
-        else runCatching { equalizer?.numberOfBands?.toInt() ?: 0 }.getOrDefault(0)
-
-    val bandRangeDb: Pair<Float, Float>?
-        get() = if (dynamics != null) -DpCurve.MAX_GAIN_DB to DpCurve.MAX_GAIN_DB
-        else runCatching { equalizer?.bandLevelRange?.let { it[0] / 100f to it[1] / 100f } }.getOrNull()
-
     private val effects get() = listOfNotNull(dynamics, equalizer, bassBoost, virtualizer)
 
     /** @return null on success, or the reason the chain could not be created. */
@@ -175,11 +167,8 @@ class TonoEffectEngine(private var mode: EngineMode = EngineMode.MODERN) {
     @Volatile var lastError: String? = null
         private set
 
-    val globalOk: Boolean @Synchronized get() = stacks[GLOBAL_SESSION]?.isAlive == true
     val sessionCount: Int @Synchronized get() = stacks.count { it.key != GLOBAL_SESSION && it.value.isAlive }
-    val primary: EffectStack? @Synchronized get() = stacks[GLOBAL_SESSION] ?: stacks.values.firstOrNull()
     val anyAttached: Boolean @Synchronized get() = stacks.values.any { it.isAlive }
-    val attachedIds: Set<Int> @Synchronized get() = stacks.keys.toSet()
 
     @Synchronized
     fun sessions(): List<SessionInfo> = stacks.map { (id, st) ->

@@ -3,21 +3,27 @@
 System-wide Bluetooth equalizer for the **Zebronics Tono** 50W tower speaker (10.16 cm subwoofer + dual 7.62 cm full-range drivers, Bluetooth 5.1).
 Built with Kotlin and Jetpack Compose (Material 3). Targets Android 16 (API 36) / HyperOS 3, tuned for the Poco X8 Pro Max (arm64-v8a).
 
-| Live hero & Auto-Tweak | Fine-tune | Setup helpers |
+| Main | Settings | First run |
 |---|---|---|
-| ![](docs/screenshots/02_phone_dj_protect.jpg) | ![](docs/screenshots/04_dance_filter_custom.jpg) | ![](docs/screenshots/03_disconnected_helpers.jpg) |
+| ![](docs/screenshots/02_phone_dj_protect.jpg) | ![](docs/screenshots/06_settings.jpg) | ![](docs/screenshots/07_not_linked.jpg) |
 
 ## Install
-1. Copy `dist/TonoTune-v1.1.0-release.apk` (it installs over v1.0.0; same signing key) to the phone (SHA-256 in the `.sha256` file next to it).
+1. Copy `dist/TonoTune-v1.2.0-release.apk`. It installs over older versions because it uses the same signing key. to the phone (SHA-256 in the `.sha256` file next to it).
 2. Open it and allow "Install unknown apps" for your file manager.
 3. Open TonoTune and allow **Nearby devices (Bluetooth)** and **Notifications**.
 4. On HyperOS, tap **Battery → No restrictions** and **Autostart → on** in the "Keep TonoTune alive" card. Without this, Android 12+ blocks the EQ from starting by itself when the speaker connects, and TonoTune shows a one-tap "activate" notification instead.
+
+## v1.2.0: clean, minimal UI
+- **Main screen:** header (speaker status, settings, master switch), one notice at a time, the live curve with **Hold for A/B**, compact preset chips that scroll sideways, and fine-tune (5 faders plus Bass boost and 3D width sliders).
+- **Settings:** Auto-Tweak, Engine, Sound check, *Every app* (with the list of linked apps) and background setup.
+- **Removed:** the speaker animation, duplicate dB readouts, the volume-zone meter, the big preset cards, the knobs, the LIVE pill and the diagnostics table.
+- **Engine auto-start:** if a player addresses TonoTune directly while the engine is stopped, the engine now starts and links that app.
 
 ## "I can't hear any difference": fixed in v1.1.0
 v1.0.0 put the EQ only on the **global output mix (session 0)**. On an Android 11 device, a measurement with Visualizer showed that this changes **nothing** in other apps' audio (≈0 dB), while the same EQ attached to an app's own audio session changes it by 6–7 dB. The engine said "LIVE", but the music was untouched.
 
 v1.1.0 fixes this:
-1. **The EQ is attached per app.** Spotify, YT Music, Poweramp and most players announce their audio session when playback starts. TonoTune links to it, and the session appears under *Settings → Engine → App sessions*. Start TonoTune before pressing play.
+1. **The EQ is attached per app.** Spotify, YT Music, Poweramp and most players announce their audio session when playback starts. TonoTune links to it, and the session appears under *Settings → Apps → Linked now*. Start TonoTune before pressing play.
 2. **Catch every app (optional, one-time PC step).** YouTube, Instagram and many other apps never announce a session. Grant one permission once:
    - Developer options → USB debugging on. On Xiaomi/HyperOS, also turn on **USB debugging (Security settings)**.
    - On a PC, run: `adb shell pm grant com.tonotune.app android.permission.DUMP`

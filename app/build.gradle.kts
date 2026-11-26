@@ -25,8 +25,8 @@ android {
         applicationId = "com.tonotune.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
 
         // Release targets the Poco X8 Pro Max (arm64). -PtonoAllAbis adds x86_64 for emulator self-tests.
         ndk {

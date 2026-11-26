@@ -9,13 +9,9 @@ import kotlinx.coroutines.flow.update
 data class EngineState(
     val running: Boolean = false,
     val effectsAttached: Boolean = false,
-    val globalSessionOk: Boolean = false,
     val attachedSessions: Int = 0,
-    val deviceBandCount: Int = 0,
-    val bandRangeDb: Pair<Float, Float>? = null,
     val volumeRatio: Float = 0.5f,
     val tweakMode: TweakMode = TweakMode.OFF,
-    val applied: EqSettings? = null,
     val lastError: String? = null,
     val mode: EngineMode = EngineMode.MODERN,
     val sessions: List<SessionInfo> = emptyList(),

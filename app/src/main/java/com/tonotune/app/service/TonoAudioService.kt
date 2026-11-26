@@ -178,28 +178,20 @@ class TonoAudioService : LifecycleService() {
         }
         val tweaked = AutoTweakEngine.apply(settings.effectiveSettings, ratio, settings.autoTweakEnabled)
         engine.apply(tweaked, enabled = !bypass)
-        publish(tweaked, AutoTweakEngine.modeFor(ratio, settings.autoTweakEnabled))
+        publish(AutoTweakEngine.modeFor(ratio, settings.autoTweakEnabled))
     }
 
-    private fun publish(
-        applied: com.tonotune.app.audio.EqSettings? = null,
-        mode: TweakMode? = null,
-    ) {
+    private fun publish(mode: TweakMode? = null) {
         if (!isRunning) return
-        val primary = engine.primary
         EngineStateHolder.update { st ->
             // Atomic re-check: never resurrect "running" after onDestroy reset the state.
             if (!isRunning) return@update st
             st.copy(
                 running = true,
                 effectsAttached = engine.anyAttached,
-                globalSessionOk = engine.globalOk,
                 attachedSessions = engine.sessionCount,
-                deviceBandCount = primary?.bandCount ?: 0,
-                bandRangeDb = primary?.bandRangeDb,
                 volumeRatio = volumeRatio.value,
                 tweakMode = mode ?: st.tweakMode,
-                applied = applied ?: st.applied,
                 lastError = if (engine.anyAttached) null else engine.lastError,
                 mode = currentMode,
                 sessions = engine.sessions(),
@@ -381,8 +373,9 @@ class TonoAudioService : LifecycleService() {
          * Starts (or pokes) the engine as a foreground service.
          * @return false if Android refused a background start (Android 12+ restriction).
          */
-        fun start(context: Context, action: String = ACTION_START): Boolean {
+        fun start(context: Context, action: String = ACTION_START, extras: Intent? = null): Boolean {
             val intent = Intent(context, TonoAudioService::class.java).setAction(action)
+            extras?.extras?.let(intent::putExtras)
             return try {
                 // Already foreground: a plain start just delivers the command, with no new
                 // "must call startForeground within N seconds" obligation (avoids an ANR/crash).
