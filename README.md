@@ -1,3 +1,5 @@
+<img src="docs/icon.png" width="96" alt="TonoTune icon">
+
 # TonoTune
 
 System-wide Bluetooth equalizer for the **Zebronics Tono** 50W tower speaker (10.16 cm subwoofer + dual 7.62 cm full-range drivers, Bluetooth 5.1).
